@@ -9,6 +9,7 @@ use Doctrine\ORM\Query\Expr\Composite;
 class BaseRepository extends EntityRepository
 {
     protected $namedParamCounter = 0;
+    protected $joins = array();
 
     public function findFiltered(array $filters = array(), $order = array(), $limit = null, $offset = 0)
     {
@@ -41,6 +42,23 @@ class BaseRepository extends EntityRepository
 			->select(array(
 				$this->alias
             ));
+
+        // Any joins?
+        if(count($this->joins))
+        {
+            // Loop joins
+            foreach($this->joins AS $someJoin)
+            {
+                list($joinType, $joinColumn, $joinTable) = $someJoin;
+
+                // Not got a dot, prefix table alias
+                if(stripos($joinColumn, ".") === false)
+                    $joinColumn = $this->alias . "." . $joinColumn;
+                
+                // Join
+                $queryBuilder->{$joinType}($joinColumn, $joinTable);
+            }
+        }
         
 		// Order
 		if(count($order))
@@ -67,8 +85,8 @@ class BaseRepository extends EntityRepository
         // Got any filters?
         if(count($filters))
         {
-            // Is this a basic non-associative array
-            if(count(array_filter(array_keys($filters), 'is_string')))
+            // Is this a basic non-associative array (non-numeric keys and not special (or/and))
+            if(count(array_filter(array_keys($filters), 'is_string')) && !in_array("or", array_keys($filters)) && !in_array("and", array_keys($filters)))
             {
                 // Some array keys are not numeric which means this is a traditional (and simple) key => value lookup
 
