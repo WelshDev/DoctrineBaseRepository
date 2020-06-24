@@ -1,0 +1,33 @@
+{
+    "name": "welshdev/doctrine-base-repository",
+    "description": "A base repository for Doctrine to provide powerful array based queries without using specific repository methods",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "orm",
+        "model",
+        "query",
+        "php",
+        "database",
+        "doctrine"
+    ],
+    "homepage": "https://welshdev.com",
+    "authors": [
+        {
+            "name": "Michael Morgan",
+            "email": "michael@welshdev.com",
+            "homepage": "https://welshdev.com",
+            "role": "Developer"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {
+        "php": ">=7",
+        "doctrine/dbal": "^v2.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "WelshDev\\DoctrineBaseRepository\\": "src"
+        }
+    }
+}
