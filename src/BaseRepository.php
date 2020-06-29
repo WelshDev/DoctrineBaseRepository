@@ -150,11 +150,8 @@ class BaseRepository extends EntityRepository
                     // Basic operators
                     if(in_array($operator, array("eq", "neq", "gt", "gte", "lt", "lte")))
                     {
-                        // Boolean
-                        if($value === true || $value === false)
-                            throw new \Exception("Lookup value cannot be boolean for eq, neq, gt, gte, lt, lte");
                         // Array
-                        elseif(is_array($value))
+                        if(is_array($value))
                         {
                             // Not supported
                             throw new \Exception("Array lookups are not supported!");
