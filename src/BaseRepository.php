@@ -11,6 +11,7 @@ class BaseRepository extends EntityRepository
 	protected $namedParamCounter = 0;
 	protected $joins = array();
 	protected $disableJoins = false;
+	protected $setupFunction = null;
 
 	public function disableJoins(bool $disableJoins)
 	{
@@ -31,7 +32,13 @@ class BaseRepository extends EntityRepository
 		$query = $queryBuilder->getQuery();
 
 		return $query->getSingleScalarResult();
+	}
 
+	public function setup(callable $callback)
+	{
+		$this->setupFunction = $callback;
+
+		return $this;
 	}
 
 	public function findFiltered(array $filters = array(), $order = array(), $limit = null, $offset = 0)
@@ -65,6 +72,10 @@ class BaseRepository extends EntityRepository
 			->select(array(
 				$this->alias
 			));
+
+		// Got a setup function?
+		if(is_callable($this->setupFunction))
+			$queryBuilder = call_user_func($this->setupFunction, $this->alias, $queryBuilder);
 
 		// Defaults options
 		$opt = array_merge(array(
