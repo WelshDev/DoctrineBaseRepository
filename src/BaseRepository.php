@@ -75,7 +75,13 @@ class BaseRepository extends EntityRepository
 
 		// Got a setup function?
 		if(is_callable($this->setupFunction))
+		{
+			// Run it
 			$queryBuilder = call_user_func($this->setupFunction, $this->alias, $queryBuilder);
+
+			// Clear it
+			$this->setupFunction = null;
+		}
 
 		// Defaults options
 		$opt = array_merge(array(
@@ -106,7 +112,7 @@ class BaseRepository extends EntityRepository
 			foreach($order AS $key => $val)
 			{
 				// Not got a dot, prefix table alias
-				if(stripos($key, ".") === false)
+				if(is_string($key) && stripos($key, ".") === false && in_array($key, $this->getClassMetadata($this->getClassName())->getColumnNames()))
 					$key = $this->alias . "." . $key;
 
 				$queryBuilder->addOrderBy($key, $val);
@@ -133,8 +139,7 @@ class BaseRepository extends EntityRepository
 
 	public function addCriteria(QueryBuilder $queryBuilder, Composite $expr, array $criteria)
 	{
-		$em = $this->getEntityManager();
-
+		// Got criteria
 		if(count($criteria))
 		{
 			foreach($criteria AS $k => $v)
@@ -196,8 +201,11 @@ class BaseRepository extends EntityRepository
 				if(stripos($field, ".") === false)
 					$field = $this->alias . "." . $field;
 
+				// Raw
+				if($operator === 'raw')
+					$expr->add($value);
 				// Or
-				if($operator === 'or')
+				elseif($operator === 'or')
 					$expr->add($this->addCriteria($queryBuilder, $queryBuilder->expr()->orX(), $value));
 				// And
 				elseif($operator === 'and')
@@ -355,7 +363,7 @@ class BaseRepository extends EntityRepository
 
 	public function buildSearchCriteria(string $keywords, array $searchableColumns = array())
 	{
-		// Not no searchable columns
+		// Got no searchable columns
 		if(!count($searchableColumns))
 			throw new \Exception("No searchable columns specified");
 
