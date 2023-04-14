@@ -300,7 +300,10 @@ class BaseRepository extends EntityRepository
 						if(count($builtArraySQL))
 						{
 							// Implode into full array
-							$fullSQL = "(" . implode($builtArraySQL, ' AND ') . ")";
+							if(phpversion() >= 8)
+								$fullSQL = "(" . implode(' AND ', $builtArraySQL) . ")";
+							else
+								$fullSQL = "(" . implode($builtArraySQL, ' AND ') . ")";
 
 							// Add it
 							$expr->add($fullSQL);
