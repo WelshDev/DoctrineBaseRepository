@@ -5,6 +5,7 @@ namespace WelshDev\DoctrineBaseRepository;
 use Doctrine\ORM\EntityRepository;
 use Doctrine\ORM\QueryBuilder;
 use Doctrine\ORM\Query\Expr\Composite;
+use Symfony\Component\Uid\Uuid;
 
 class BaseRepository extends EntityRepository
 {
@@ -221,6 +222,11 @@ class BaseRepository extends EntityRepository
 					if(is_object($value) && $value instanceof \DateTime)
 					{
 						$expr->add($queryBuilder->expr()->{$operator}($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value))));
+					}
+					// Is it a UUID?
+					elseif($value instanceof Uuid)
+					{
+						$expr->add($queryBuilder->expr()->{$operator}($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value->toBinary()), ParameterType::BINARY)));
 					}
 					// Other object (likely an association)
 					elseif(is_object($value))
