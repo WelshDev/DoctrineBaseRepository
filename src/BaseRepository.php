@@ -6,6 +6,7 @@ use Doctrine\ORM\EntityRepository;
 use Doctrine\ORM\QueryBuilder;
 use Doctrine\ORM\Query\Expr\Composite;
 use Symfony\Component\Uid\Uuid;
+use Doctrine\DBAL\ParameterType;
 
 class BaseRepository extends EntityRepository
 {
