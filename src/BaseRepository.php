@@ -14,6 +14,19 @@ class BaseRepository extends EntityRepository
 	protected $joins = array();
 	protected $disableJoins = false;
 	protected $setupFunction = null;
+	protected $filterFunctions = array();
+
+	public function addFilterFunction(callable $func)
+	{
+		$this->filterFunctions[] = $func;
+
+		return $this;
+	}
+
+	public function getFilterFunctions()
+	{
+		return $this->filterFunctions;
+	}
 
 	public function disableJoins(bool $disableJoins)
 	{
@@ -51,6 +64,9 @@ class BaseRepository extends EntityRepository
 		// Get the query
 		$query = $queryBuilder->getQuery();
 
+		// Clear filters
+		$this->filterFunctions = [];
+
 		// Execute and return
 		return $query->getResult();
 	}
@@ -62,6 +78,9 @@ class BaseRepository extends EntityRepository
 
 		// Get the query
 		$query = $queryBuilder->getQuery();
+
+		// Clear filters
+		$this->filterFunctions = [];
 
 		// Execute and return
 		return $query->getOneOrNullResult();
@@ -76,7 +95,7 @@ class BaseRepository extends EntityRepository
 			));
 
 		// Got a setup function?
-		if(is_callable($this->setupFunction))
+		if (is_callable($this->setupFunction))
 		{
 			// Run it
 			$queryBuilder = call_user_func($this->setupFunction, $this->alias, $queryBuilder);
@@ -91,15 +110,15 @@ class BaseRepository extends EntityRepository
 		), $opt);
 
 		// Any joins?
-		if(count($this->joins) && !$opt['disable_joins'] && !$this->disableJoins)
+		if (count($this->joins) && !$opt['disable_joins'] && !$this->disableJoins)
 		{
 			// Loop joins
-			foreach($this->joins AS $someJoin)
+			foreach ($this->joins as $someJoin)
 			{
 				list($joinType, $joinColumn, $joinTable) = $someJoin;
 
 				// Not got a dot, prefix table alias
-				if(stripos($joinColumn, ".") === false)
+				if (stripos($joinColumn, ".") === false)
 					$joinColumn = $this->alias . "." . $joinColumn;
 
 				// Join
@@ -108,13 +127,13 @@ class BaseRepository extends EntityRepository
 		}
 
 		// Order
-		if(count($order))
+		if (count($order))
 		{
 			// Loop columns to order
-			foreach($order AS $key => $val)
+			foreach ($order as $key => $val)
 			{
 				// Not got a dot, prefix table alias
-				if(is_string($key) && stripos($key, ".") === false && in_array($key, $this->getClassMetadata($this->getClassName())->getColumnNames()))
+				if (is_string($key) && stripos($key, ".") === false && in_array($key, $this->getClassMetadata($this->getClassName())->getColumnNames()))
 					$key = $this->alias . "." . $key;
 
 				$queryBuilder->addOrderBy($key, $val);
@@ -122,18 +141,28 @@ class BaseRepository extends EntityRepository
 		}
 
 		// Limit
-		if($limit)
+		if ($limit)
 			$queryBuilder->setMaxResults($limit);
 
 		// Offset
-		if($offset)
+		if ($offset)
 			$queryBuilder->setFirstResult($offset);
 
+		// Loop the filter functions
+		foreach ($this->getFilterFunctions() as $someFunc)
+		{
+			$queryBuilder = $someFunc($queryBuilder);
+		}
+
+
+
+		$queryBuilder->addGroupBy($this->alias . ".id");
+
 		// Got any filters?
-		if(count($filters))
+		if (count($filters))
 		{
 			// Add the where
-			$queryBuilder->where($this->addCriteria($queryBuilder, $queryBuilder->expr()->andX(), $filters));
+			$queryBuilder->andWhere($this->addCriteria($queryBuilder, $queryBuilder->expr()->andX(), $filters));
 		}
 
 		return $queryBuilder;
@@ -142,19 +171,19 @@ class BaseRepository extends EntityRepository
 	public function addCriteria(QueryBuilder $queryBuilder, Composite $expr, array $criteria)
 	{
 		// Got criteria
-		if(count($criteria))
+		if (count($criteria))
 		{
-			foreach($criteria AS $k => $v)
+			foreach ($criteria as $k => $v)
 			{
 				// Numeric (i.e. it's being passed in as an operator e.g. ["id", "eq", 999])
-				if(is_numeric($k))
+				if (is_numeric($k))
 				{
 					// Not an array
-					if(!is_array($v))
+					if (!is_array($v))
 						throw new \Exception("Non-indexed criteria must be in array form e.g. ['id', 'eq', 1234]");
 
 					// Extract
-					if(count($v) == 3)
+					if (count($v) == 3)
 						list($field, $operator, $value) = $v;
 					else
 					{
@@ -165,7 +194,7 @@ class BaseRepository extends EntityRepository
 					}
 
 					// Is this a special case i.e. or/and
-					if(in_array($field, array("or", "and")))
+					if (in_array($field, array("or", "and")))
 					{
 						// Move things around
 						$value = $operator;
@@ -179,11 +208,11 @@ class BaseRepository extends EntityRepository
 				else
 				{
 					// Is the value an array?
-					if(is_array($v))
+					if (is_array($v))
 						throw new \Exception("Indexed criteria does not support array values");
 
 					// Is the value null?
-					if(is_null($v))
+					if (is_null($v))
 					{
 						// Use "is_null" operator
 						$field = $k;
@@ -200,42 +229,42 @@ class BaseRepository extends EntityRepository
 				}
 
 				// Not got a dot, prefix table alias
-				if(stripos($field, ".") === false)
+				if (stripos($field, ".") === false)
 					$field = $this->alias . "." . $field;
 
 				// Raw
-				if($operator === 'raw')
+				if ($operator === 'raw')
 					$expr->add($value);
 				// Or
-				elseif($operator === 'or')
+				elseif ($operator === 'or')
 					$expr->add($this->addCriteria($queryBuilder, $queryBuilder->expr()->orX(), $value));
 				// And
-				elseif($operator === 'and')
+				elseif ($operator === 'and')
 					$expr->add($this->addCriteria($queryBuilder, $queryBuilder->expr()->andX(), $value));
 				// Basic operators
-				elseif(in_array($operator, array("eq", "neq", "gt", "gte", "lt", "lte", "like")))
+				elseif (in_array($operator, array("eq", "neq", "gt", "gte", "lt", "lte", "like")))
 				{
 					// Arrays not supported for this operator
-					if(is_array($value))
+					if (is_array($value))
 						throw new \Exception("Array lookups are not supported for the '" . $operator . "' operator");
 
 					// DateTime
-					if(is_object($value) && $value instanceof \DateTime)
+					if (is_object($value) && $value instanceof \DateTime)
 					{
 						$expr->add($queryBuilder->expr()->{$operator}($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value))));
 					}
 					// Is it a UUID?
-					elseif($value instanceof Uuid)
+					elseif ($value instanceof Uuid)
 					{
 						$expr->add($queryBuilder->expr()->{$operator}($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value->toBinary()), ParameterType::BINARY)));
 					}
 					// Other object (likely an association)
-					elseif(is_object($value))
+					elseif (is_object($value))
 					{
 						$expr->add($queryBuilder->expr()->{$operator}($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value))));
 					}
 					// Is it null?
-					elseif(is_null($value))
+					elseif (is_null($value))
 					{
 						$expr->add($queryBuilder->expr()->isNull($field));
 					}
@@ -246,39 +275,39 @@ class BaseRepository extends EntityRepository
 					}
 				}
 				// Null operator
-				elseif(in_array($operator, array("is_null", "not_null")))
+				elseif (in_array($operator, array("is_null", "not_null")))
 				{
 					// Is null
-					if($operator == "is_null")
+					if ($operator == "is_null")
 					{
 						// True or false value?
-						if($value)
+						if ($value)
 							$expr->add($queryBuilder->expr()->isNull($field));
 						else
 							$expr->add($queryBuilder->expr()->isNotNull($field));
 					}
 					// Not null
-					elseif($operator == "not_null")
+					elseif ($operator == "not_null")
 					{
 						// True or false value?
-						if($value)
+						if ($value)
 							$expr->add($queryBuilder->expr()->isNotNull($field));
 						else
 							$expr->add($queryBuilder->expr()->isNull($field));
 					}
 				}
 				// In/NotIn operators
-				elseif(in_array($operator, array("in", "not_in")))
+				elseif (in_array($operator, array("in", "not_in")))
 				{
 					// Make sure it's an array
-					if(!is_array($value))
+					if (!is_array($value))
 						throw new \Exception("Invalid value for operator: " . $operator);
 
 					// In
-					if($operator == "in")
+					if ($operator == "in")
 						$expr->add($queryBuilder->expr()->in($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value))));
 					// Not in
-					elseif($operator == "not_in")
+					elseif ($operator == "not_in")
 					{
 						// Need to use multiple != operations because "NOT IN" is not null-safe
 						// We therefore loop the values and build the SQL string
@@ -287,10 +316,10 @@ class BaseRepository extends EntityRepository
 						$builtArraySQL = array();
 
 						// Loop the values
-						foreach($this->prepareValue($value) AS $someValue)
+						foreach ($this->prepareValue($value) as $someValue)
 						{
 							// Is it null?
-							if(is_null($someValue))
+							if (is_null($someValue))
 							{
 								// Make sure we don't return if null
 								$builtArraySQL[] = '(' . $field . ' IS NOT NULL)';
@@ -304,10 +333,10 @@ class BaseRepository extends EntityRepository
 						}
 
 						// Got anything?
-						if(count($builtArraySQL))
+						if (count($builtArraySQL))
 						{
 							// Implode into full array
-							if(phpversion() >= 8)
+							if (phpversion() >= 8)
 								$fullSQL = "(" . implode(' AND ', $builtArraySQL) . ")";
 							else
 								$fullSQL = "(" . implode($builtArraySQL, ' AND ') . ")";
@@ -345,20 +374,20 @@ class BaseRepository extends EntityRepository
 	public function prepareValue($value)
 	{
 		// DateTime
-		if(is_object($value) && $value instanceof \DateTime)
+		if (is_object($value) && $value instanceof \DateTime)
 		{
 			return $value->format('Y-m-d H:i:s');
 		}
 		// Object
-		elseif(is_object($value))
+		elseif (is_object($value))
 		{
 			return $value;
 		}
 		// Array
-		elseif(is_array($value))
+		elseif (is_array($value))
 		{
 			// Loop
-			foreach($value AS $k => $v)
+			foreach ($value as $k => $v)
 			{
 				// Prepare it
 				$value[$k] = $this->prepareValue($v);
@@ -374,7 +403,7 @@ class BaseRepository extends EntityRepository
 	public function buildSearchCriteria(string $keywords, array $searchableColumns = array())
 	{
 		// Got no searchable columns
-		if(!count($searchableColumns))
+		if (!count($searchableColumns))
 			throw new \Exception("No searchable columns specified");
 
 		// Explode individual keywords
@@ -384,13 +413,13 @@ class BaseRepository extends EntityRepository
 		$keywordCriteria = array();
 
 		// Loop keywords
-		foreach($keywords AS $someKeyword)
+		foreach ($keywords as $someKeyword)
 		{
 			// Grab this group
 			$keywordGroup = array();
 
 			// Loop search columns
-			foreach($searchableColumns AS $searchColumn)
+			foreach ($searchableColumns as $searchColumn)
 			{
 				// Grab it
 				$keywordGroup[] = array($searchColumn, "like", "%" . $someKeyword . "%");
