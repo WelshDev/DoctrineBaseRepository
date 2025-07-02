@@ -7,19 +7,176 @@ use Doctrine\ORM\QueryBuilder;
 use Doctrine\ORM\Query\Expr\Composite;
 use Symfony\Component\Uid\Uuid;
 use Doctrine\DBAL\ParameterType;
+use WelshDev\DoctrineBaseRepository\Contract\SpecificationInterface;
+use WelshDev\DoctrineBaseRepository\Contract\QuerySetupInterface;
+use WelshDev\DoctrineBaseRepository\Service\CriteriaBuilder;
+use WelshDev\DoctrineBaseRepository\Service\FilterManager;
+use WelshDev\DoctrineBaseRepository\Service\JoinManager;
+use WelshDev\DoctrineBaseRepository\Service\ParameterManager;
 
 class BaseRepository extends EntityRepository
 {
+	// Legacy properties for backward compatibility
 	protected $namedParamCounter = 0;
 	protected $joins = array();
 	protected $disableJoins = false;
 	protected $setupFunction = null;
 	protected $filterFunctions = array();
 
+	// New service properties
+	protected ?CriteriaBuilder $criteriaBuilder = null;
+	protected ?FilterManager $filterManager = null;
+	protected ?JoinManager $joinManager = null;
+	protected ?ParameterManager $parameterManager = null;
+	
+	/** @var QuerySetupInterface[] */
+	protected array $querySetups = [];
+
+	/**
+	 * Get or create the CriteriaBuilder service
+	 */
+	protected function getCriteriaBuilder(): CriteriaBuilder
+	{
+		if ($this->criteriaBuilder === null) {
+			$this->criteriaBuilder = RepositoryServiceFactory::createCriteriaBuilder($this->getParameterManager());
+		}
+		return $this->criteriaBuilder;
+	}
+
+	/**
+	 * Get or create the FilterManager service
+	 */
+	protected function getFilterManager(): FilterManager
+	{
+		if ($this->filterManager === null) {
+			$this->filterManager = RepositoryServiceFactory::createFilterManager();
+		}
+		return $this->filterManager;
+	}
+
+	/**
+	 * Get or create the JoinManager service
+	 */
+	protected function getJoinManager(): JoinManager
+	{
+		if ($this->joinManager === null) {
+			$this->joinManager = RepositoryServiceFactory::createJoinManager();
+		}
+		return $this->joinManager;
+	}
+
+	/**
+	 * Get or create the ParameterManager service
+	 */
+	protected function getParameterManager(): ParameterManager
+	{
+		if ($this->parameterManager === null) {
+			$this->parameterManager = RepositoryServiceFactory::createParameterManager();
+		}
+		return $this->parameterManager;
+	}
+
+	// New API methods with better naming
+
+	/**
+	 * Find entities by criteria array (new API method)
+	 *
+	 * @param array $criteria
+	 * @param array $orderBy
+	 * @param int|null $limit
+	 * @param int $offset
+	 * @return array
+	 */
+	public function findByCriteria(array $criteria = array(), array $orderBy = array(), ?int $limit = null, int $offset = 0): array
+	{
+		$queryBuilder = $this->buildQuery($criteria, $orderBy, $limit, $offset);
+		$query = $queryBuilder->getQuery();
+		
+		$this->filterFunctions = [];
+		
+		return $query->getResult();
+	}
+
+	/**
+	 * Find one entity by criteria array (new API method)
+	 *
+	 * @param array $criteria
+	 * @param array $orderBy
+	 * @param int $offset
+	 * @return object|null
+	 */
+	public function findOneByCriteria(array $criteria = array(), array $orderBy = array(), int $offset = 0): ?object
+	{
+		$queryBuilder = $this->buildQuery($criteria, $orderBy, 1, $offset);
+		$query = $queryBuilder->getQuery();
+		
+		$this->filterFunctions = [];
+		
+		return $query->getOneOrNullResult();
+	}
+
+	/**
+	 * Count entities by criteria array (new API method)
+	 *
+	 * @param array $criteria
+	 * @param string $column
+	 * @return int
+	 */
+	public function countByCriteria(array $criteria = array(), string $column = 'id'): int
+	{
+		$queryBuilder = $this->buildQuery($criteria);
+		$queryBuilder->select('count(' . $this->getEntityAlias() . '.' . $column . ')');
+		
+		$query = $queryBuilder->getQuery();
+		
+		return (int) $query->getSingleScalarResult();
+	}
+
+	/**
+	 * Find entities using a specification
+	 *
+	 * @param SpecificationInterface $specification
+	 * @param array $orderBy
+	 * @param int|null $limit
+	 * @param int $offset
+	 * @return array
+	 */
+	public function findBySpecification(SpecificationInterface $specification, array $orderBy = array(), ?int $limit = null, int $offset = 0): array
+	{
+		$alias = $this->getEntityAlias();
+		$queryBuilder = $this->createQueryBuilder($alias);
+		
+		$this->getCriteriaBuilder()->applySpecification($queryBuilder, $specification);
+		
+		$this->applyOrderBy($queryBuilder, $orderBy);
+		
+		if ($limit) {
+			$queryBuilder->setMaxResults($limit);
+		}
+		if ($offset) {
+			$queryBuilder->setFirstResult($offset);
+		}
+		
+		return $queryBuilder->getQuery()->getResult();
+	}
+
+	/**
+	 * Add a query setup handler
+	 *
+	 * @param QuerySetupInterface $setup
+	 * @return self
+	 */
+	public function addQuerySetup(QuerySetupInterface $setup): self
+	{
+		$this->querySetups[] = $setup;
+		return $this;
+	}
+
+	// Legacy methods (preserved for backward compatibility)
+
 	public function addFilterFunction(callable $func)
 	{
 		$this->filterFunctions[] = $func;
-
 		return $this;
 	}
 
@@ -31,114 +188,61 @@ class BaseRepository extends EntityRepository
 	public function disableJoins(bool $disableJoins)
 	{
 		$this->disableJoins = $disableJoins;
-
+		$this->getJoinManager()->disableJoins($disableJoins);
 		return $this;
 	}
 
 	public function countRows(string $column, array $filters = array())
 	{
-		// Get query builder
-		$queryBuilder = $this->buildQuery($filters);
-
-		// Select the count
-		$queryBuilder->select('count(' . $column . ')');
-
-		// Get the query
-		$query = $queryBuilder->getQuery();
-
-		return $query->getSingleScalarResult();
+		return $this->countByCriteria($filters, $column);
 	}
 
 	public function setup(callable $callback)
 	{
 		$this->setupFunction = $callback;
-
 		return $this;
 	}
 
 	public function findFiltered(array $filters = array(), $order = array(), $limit = null, $offset = 0)
 	{
-		// Get query builder
-		$queryBuilder = $this->buildQuery($filters, $order, $limit, $offset);
-
-		// Get the query
-		$query = $queryBuilder->getQuery();
-
-		// Clear filters
-		$this->filterFunctions = [];
-
-		// Execute and return
-		return $query->getResult();
+		return $this->findByCriteria($filters, $order, $limit, $offset);
 	}
 
 	public function findOneFiltered(array $filters = array(), $order = array(), $offset = 0)
 	{
-		// Get query builder
-		$queryBuilder = $this->buildQuery($filters, $order, 1, $offset);
-
-		// Get the query
-		$query = $queryBuilder->getQuery();
-
-		// Clear filters
-		$this->filterFunctions = [];
-
-		// Execute and return
-		return $query->getOneOrNullResult();
+		return $this->findOneByCriteria($filters, $order, $offset);
 	}
 
 	public function buildQuery(array $filters = array(), $order = array(), $limit = null, $offset = 0, array $opt = [])
 	{
+		$alias = $this->getEntityAlias();
+		
 		// Create the query builder
-		$queryBuilder = $this->createQueryBuilder($this->alias)
-			->select(array(
-				$this->alias
-			));
+		$queryBuilder = $this->createQueryBuilder($alias)
+			->select(array($alias));
 
-		// Got a setup function?
-		if (is_callable($this->setupFunction))
-		{
-			// Run it
-			$queryBuilder = call_user_func($this->setupFunction, $this->alias, $queryBuilder);
+		// Apply query setups (new approach)
+		foreach ($this->querySetups as $setup) {
+			$queryBuilder = $setup->setup($alias, $queryBuilder);
+		}
 
-			// Clear it
+		// Got a setup function? (legacy support)
+		if (is_callable($this->setupFunction)) {
+			$queryBuilder = call_user_func($this->setupFunction, $alias, $queryBuilder);
 			$this->setupFunction = null;
 		}
 
-		// Defaults options
+		// Default options
 		$opt = array_merge(array(
 			'disable_joins' => false
 		), $opt);
 
-		// Any joins?
-		if (count($this->joins) && !$opt['disable_joins'] && !$this->disableJoins)
-		{
-			// Loop joins
-			foreach ($this->joins as $someJoin)
-			{
-				list($joinType, $joinColumn, $joinTable) = $someJoin;
-
-				// Not got a dot, prefix table alias
-				if (stripos($joinColumn, ".") === false)
-					$joinColumn = $this->alias . "." . $joinColumn;
-
-				// Join
-				$queryBuilder->{$joinType}($joinColumn, $joinTable);
-			}
-		}
+		// Apply joins using new JoinManager (but maintain legacy join array for compatibility)
+		$this->syncLegacyJoins();
+		$this->getJoinManager()->applyJoins($queryBuilder, $alias, $opt);
 
 		// Order
-		if (count($order))
-		{
-			// Loop columns to order
-			foreach ($order as $key => $val)
-			{
-				// Not got a dot, prefix table alias
-				if (is_string($key) && stripos($key, ".") === false && in_array($key, $this->getClassMetadata($this->getClassName())->getColumnNames()))
-					$key = $this->alias . "." . $key;
-
-				$queryBuilder->addOrderBy($key, $val);
-			}
-		}
+		$this->applyOrderBy($queryBuilder, $order);
 
 		// Limit
 		if ($limit)
@@ -148,256 +252,44 @@ class BaseRepository extends EntityRepository
 		if ($offset)
 			$queryBuilder->setFirstResult($offset);
 
-		// Loop the filter functions
-		foreach ($this->getFilterFunctions() as $someFunc)
-		{
-			$queryBuilder = $someFunc($queryBuilder);
-		}
+		// Apply filters using new FilterManager and legacy filter functions
+		$this->getFilterManager()->applyFilters($queryBuilder, static::class, $this->filterFunctions);
 
+		$queryBuilder->addGroupBy($alias . ".id");
 
-
-		$queryBuilder->addGroupBy($this->alias . ".id");
-
-		// Got any filters?
-		if (count($filters))
-		{
-			// Add the where
-			$queryBuilder->andWhere($this->addCriteria($queryBuilder, $queryBuilder->expr()->andX(), $filters));
+		// Apply criteria using new CriteriaBuilder
+		if (count($filters)) {
+			$this->getCriteriaBuilder()->applyCriteria($queryBuilder, $filters, $alias);
 		}
 
 		return $queryBuilder;
 	}
 
+	// Keep the original addCriteria method for any direct usage (marked deprecated)
+	
+	/**
+	 * @deprecated Use CriteriaBuilder service instead
+	 */
 	public function addCriteria(QueryBuilder $queryBuilder, Composite $expr, array $criteria)
 	{
-		// Got criteria
-		if (count($criteria))
-		{
-			foreach ($criteria as $k => $v)
-			{
-				// Numeric (i.e. it's being passed in as an operator e.g. ["id", "eq", 999])
-				if (is_numeric($k))
-				{
-					// Not an array
-					if (!is_array($v))
-						throw new \Exception("Non-indexed criteria must be in array form e.g. ['id', 'eq', 1234]");
-
-					// Extract
-					if (count($v) == 3)
-						list($field, $operator, $value) = $v;
-					else
-					{
-						list($field, $operator) = $v;
-
-						// Default value of true
-						$value = true;
-					}
-
-					// Is this a special case i.e. or/and
-					if (in_array($field, array("or", "and")))
-					{
-						// Move things around
-						$value = $operator;
-						$operator = $field;
-
-						// Field is no longer used
-						$field = null;
-					}
-				}
-				// Indexed (e.g. ["id" => 1234])
-				else
-				{
-					// Is the value an array?
-					if (is_array($v))
-						throw new \Exception("Indexed criteria does not support array values");
-
-					// Is the value null?
-					if (is_null($v))
-					{
-						// Use "is_null" operator
-						$field = $k;
-						$operator = "is_null";
-						$value = true;
-					}
-					else
-					{
-						// Default to "eq" operator
-						$field = $k;
-						$operator = "eq";
-						$value = $v;
-					}
-				}
-
-				// Not got a dot, prefix table alias
-				if (stripos($field, ".") === false)
-					$field = $this->alias . "." . $field;
-
-				// Raw
-				if ($operator === 'raw')
-					$expr->add($value);
-				// Or
-				elseif ($operator === 'or')
-					$expr->add($this->addCriteria($queryBuilder, $queryBuilder->expr()->orX(), $value));
-				// And
-				elseif ($operator === 'and')
-					$expr->add($this->addCriteria($queryBuilder, $queryBuilder->expr()->andX(), $value));
-				// Basic operators
-				elseif (in_array($operator, array("eq", "neq", "gt", "gte", "lt", "lte", "like")))
-				{
-					// Arrays not supported for this operator
-					if (is_array($value))
-						throw new \Exception("Array lookups are not supported for the '" . $operator . "' operator");
-
-					// DateTime
-					if (is_object($value) && $value instanceof \DateTime)
-					{
-						$expr->add($queryBuilder->expr()->{$operator}($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value))));
-					}
-					// Is it a UUID?
-					elseif ($value instanceof Uuid)
-					{
-						$expr->add($queryBuilder->expr()->{$operator}($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value->toBinary()), ParameterType::BINARY)));
-					}
-					// Other object (likely an association)
-					elseif (is_object($value))
-					{
-						$expr->add($queryBuilder->expr()->{$operator}($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value))));
-					}
-					// Is it null?
-					elseif (is_null($value))
-					{
-						$expr->add($queryBuilder->expr()->isNull($field));
-					}
-					else
-					{
-						// Literal
-						$expr->add($queryBuilder->expr()->{$operator}($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value))));
-					}
-				}
-				// Null operator
-				elseif (in_array($operator, array("is_null", "not_null")))
-				{
-					// Is null
-					if ($operator == "is_null")
-					{
-						// True or false value?
-						if ($value)
-							$expr->add($queryBuilder->expr()->isNull($field));
-						else
-							$expr->add($queryBuilder->expr()->isNotNull($field));
-					}
-					// Not null
-					elseif ($operator == "not_null")
-					{
-						// True or false value?
-						if ($value)
-							$expr->add($queryBuilder->expr()->isNotNull($field));
-						else
-							$expr->add($queryBuilder->expr()->isNull($field));
-					}
-				}
-				// In/NotIn operators
-				elseif (in_array($operator, array("in", "not_in")))
-				{
-					// Make sure it's an array
-					if (!is_array($value))
-						throw new \Exception("Invalid value for operator: " . $operator);
-
-					// In
-					if ($operator == "in")
-						$expr->add($queryBuilder->expr()->in($field, $this->createNamedParameter($queryBuilder, $this->prepareValue($value))));
-					// Not in
-					elseif ($operator == "not_in")
-					{
-						// Need to use multiple != operations because "NOT IN" is not null-safe
-						// We therefore loop the values and build the SQL string
-
-						// Hold the array
-						$builtArraySQL = array();
-
-						// Loop the values
-						foreach ($this->prepareValue($value) as $someValue)
-						{
-							// Is it null?
-							if (is_null($someValue))
-							{
-								// Make sure we don't return if null
-								$builtArraySQL[] = '(' . $field . ' IS NOT NULL)';
-							}
-							else
-							{
-								// Where (field = value OR field IS NULL)
-								// This is done because != is not null safe and would therefore not return anything with null values
-								$builtArraySQL[] = '(' . $field . ' != ' . $this->createNamedParameter($queryBuilder, $someValue) . ' OR ' . $field . ' IS NULL)';
-							}
-						}
-
-						// Got anything?
-						if (count($builtArraySQL))
-						{
-							// Implode into full array
-							if (phpversion() >= 8)
-								$fullSQL = "(" . implode(' AND ', $builtArraySQL) . ")";
-							else
-								$fullSQL = "(" . implode($builtArraySQL, ' AND ') . ")";
-
-							// Add it
-							$expr->add($fullSQL);
-						}
-					}
-				}
-				// Unsupported operator
-				else
-					throw new \Exception("Unsupported operator: " . $operator);
-			}
-		}
-		else
-			throw new \Exception("Empty criteria");
-
-		return $expr;
+		return $this->getCriteriaBuilder()->buildCriteria($queryBuilder, $expr, $criteria, $this->getEntityAlias());
 	}
 
+	/**
+	 * @deprecated Use ParameterManager service instead
+	 */
 	public function createNamedParameter(QueryBuilder $queryBuilder, $value)
 	{
-		// Increase count
+		// Use legacy counter for backward compatibility
 		$this->namedParamCounter++;
-
-		// Create the new placeholder
 		$placeHolder = ':paramValue' . $this->namedParamCounter;
-
-		// Set the parameter
-		$queryBuilder->setParameter(substr($placeHolder, 1), $value);
-
+		$queryBuilder->setParameter(substr($placeHolder, 1), $this->prepareValue($value));
 		return $placeHolder;
 	}
 
 	public function prepareValue($value)
 	{
-		// DateTime
-		if (is_object($value) && $value instanceof \DateTime)
-		{
-			return $value->format('Y-m-d H:i:s');
-		}
-		// Object
-		elseif (is_object($value))
-		{
-			return $value;
-		}
-		// Array
-		elseif (is_array($value))
-		{
-			// Loop
-			foreach ($value as $k => $v)
-			{
-				// Prepare it
-				$value[$k] = $this->prepareValue($v);
-			}
-
-			return $value;
-		}
-		// Anything else
-		else
-			return $value;
+		return $this->getParameterManager()->prepareValue($value);
 	}
 
 	public function buildSearchCriteria(string $keywords, array $searchableColumns = array())
@@ -431,5 +323,61 @@ class BaseRepository extends EntityRepository
 
 		// Return the 'and' array
 		return array("and", $keywordCriteria);
+	}
+
+	/**
+	 * Get entity alias for queries
+	 */
+	protected function getEntityAlias(): string
+	{
+		if (property_exists($this, 'alias') && $this->alias) {
+			return $this->alias;
+		}
+		
+		$className = $this->getClassName();
+		$parts = explode('\\', $className);
+		$shortName = end($parts);
+		return strtolower(substr($shortName, 0, 1));
+	}
+
+	/**
+	 * Apply order by clauses to query builder
+	 */
+	protected function applyOrderBy(QueryBuilder $queryBuilder, array $order): void
+	{
+		if (!count($order)) {
+			return;
+		}
+		
+		$alias = $this->getEntityAlias();
+		$metadata = $this->getClassMetadata();
+		
+		foreach ($order as $key => $val) {
+			// Not got a dot, prefix table alias
+			if (is_string($key) && stripos($key, ".") === false && in_array($key, $metadata->getColumnNames())) {
+				$key = $alias . "." . $key;
+			}
+			
+			$queryBuilder->addOrderBy($key, $val);
+		}
+	}
+
+	/**
+	 * Sync legacy joins array with new JoinManager
+	 */
+	protected function syncLegacyJoins(): void
+	{
+		$joinManager = $this->getJoinManager();
+		
+		// Clear existing joins in manager
+		$joinManager->clearJoins();
+		
+		// Add legacy joins to manager
+		foreach ($this->joins as $join) {
+			if (count($join) >= 3) {
+				list($joinType, $joinColumn, $joinTable) = $join;
+				$joinManager->addJoin($joinType, $joinColumn, $joinTable);
+			}
+		}
 	}
 }
