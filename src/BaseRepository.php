@@ -161,6 +161,41 @@ class BaseRepository extends EntityRepository
 	}
 
 	/**
+	 * Update entities by criteria
+	 *
+	 * @param array $criteria
+	 * @param array $updateData
+	 * @return int Number of affected rows
+	 */
+	public function updateByCriteria(array $criteria, array $updateData): int
+	{
+		$alias = $this->getEntityAlias();
+		$queryBuilder = $this->getEntityManager()->createQueryBuilder()
+			->update($this->getClassName(), $alias);
+		
+		$batchService = new \WelshDev\DoctrineBaseRepository\Service\BatchOperationService($this->getCriteriaBuilder());
+		
+		return $batchService->updateByCriteria($queryBuilder, $criteria, $updateData, $alias);
+	}
+
+	/**
+	 * Delete entities by criteria
+	 *
+	 * @param array $criteria
+	 * @return int Number of affected rows
+	 */
+	public function deleteByCriteria(array $criteria): int
+	{
+		$alias = $this->getEntityAlias();
+		$queryBuilder = $this->getEntityManager()->createQueryBuilder()
+			->delete($this->getClassName(), $alias);
+		
+		$batchService = new \WelshDev\DoctrineBaseRepository\Service\BatchOperationService($this->getCriteriaBuilder());
+		
+		return $batchService->deleteByCriteria($queryBuilder, $criteria, $alias);
+	}
+
+	/**
 	 * Add a query setup handler
 	 *
 	 * @param QuerySetupInterface $setup

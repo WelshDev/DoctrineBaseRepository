@@ -125,4 +125,15 @@ class RepositoryServiceFactory
         self::$filterManager = null;
         self::$joinManager = null;
     }
+
+    /**
+     * Check if services are initialized (for testing)
+     */
+    public static function isInitialized(): bool
+    {
+        return self::$parameterManager !== null ||
+               self::$criteriaBuilder !== null ||
+               self::$filterManager !== null ||
+               self::$joinManager !== null;
+    }
 }

@@ -121,8 +121,12 @@ class CriteriaBuilder
      */
     private function applyCriterion(QueryBuilder $queryBuilder, Composite $expr, ?string $field, string $operator, $value, string $alias): void
     {
+        // Handle JSON field notation (e.g., "payload->user->id")
+        if ($field && strpos($field, '->') !== false) {
+            $field = $this->processJsonField($field, $alias);
+        }
         // Add alias prefix if no dot present
-        if ($field && stripos($field, ".") === false) {
+        elseif ($field && stripos($field, ".") === false) {
             $field = $alias . "." . $field;
         }
 
@@ -157,6 +161,11 @@ class CriteriaBuilder
             case 'in':
             case 'not_in':
                 $this->applyInOperator($queryBuilder, $expr, $field, $operator, $value);
+                break;
+
+            case 'json_contains':
+            case 'json_extract':
+                $this->applyJsonOperator($queryBuilder, $expr, $field, $operator, $value);
                 break;
 
             default:
@@ -229,6 +238,51 @@ class CriteriaBuilder
                 $fullSQL = "(" . implode(' AND ', $builtArraySQL) . ")";
                 $expr->add($fullSQL);
             }
+        }
+    }
+
+    /**
+     * Process JSON field notation (e.g., "payload->user->id")
+     *
+     * @param string $field
+     * @param string $alias
+     * @return string
+     */
+    private function processJsonField(string $field, string $alias): string
+    {
+        // Check if field already has alias
+        if (stripos($field, ".") === false) {
+            // Add alias prefix to the first part
+            $parts = explode('->', $field, 2);
+            $field = $alias . "." . $parts[0] . (isset($parts[1]) ? '->' . $parts[1] : '');
+        }
+        
+        return $field;
+    }
+
+    /**
+     * Apply JSON operators (PostgreSQL and MySQL 5.7+)
+     */
+    private function applyJsonOperator(QueryBuilder $queryBuilder, Composite $expr, string $field, string $operator, $value): void
+    {
+        switch ($operator) {
+            case 'json_contains':
+                // PostgreSQL: column @> value
+                // MySQL: JSON_CONTAINS(column, value)
+                $parameter = $this->parameterManager->createNamedParameter($queryBuilder, json_encode($value));
+                $expr->add("JSON_CONTAINS({$field}, {$parameter})");
+                break;
+                
+            case 'json_extract':
+                // For JSON path extraction: JSON_EXTRACT(column, path) = value
+                if (!is_array($value) || !isset($value['path']) || !isset($value['value'])) {
+                    throw new \Exception("json_extract operator requires array with 'path' and 'value' keys");
+                }
+                
+                $pathParam = $this->parameterManager->createNamedParameter($queryBuilder, $value['path']);
+                $valueParam = $this->parameterManager->createNamedParameter($queryBuilder, $value['value']);
+                $expr->add("JSON_EXTRACT({$field}, {$pathParam}) = {$valueParam}");
+                break;
         }
     }
 }
